@@ -121,9 +121,46 @@ MEMBER 3: ABDUL SAMAD
 // RESPONSIBILITIES:
 // 1. Implement and improve node management:
 //      - findNode()
+// Find a node by user ID
+Node* findNode(int userID) {                                         // returns nullptr if missing
+    for (size_t i = 0; i < nodes.size(); i++)                        // check every node
+        if (nodes[i]->userID == userID) return nodes[i];             // found it
+    return nullptr;                                                  // no such node
+} // end of findNode
+
 //      - findReferenceNode()
+// Find the best valid node (longest valid chain)
+Node* findReferenceNode(Node* exclude) {                             // exclude = node to skip
+    Node* best = nullptr;                                            // best node so far
+    for (size_t i = 0; i < nodes.size(); i++) {                      // check every node
+        Node* n = nodes[i];                                          // current node
+        if (n == exclude) continue;                                  // skip excluded node
+        if (!validateChain(n, false)) continue;                      // skip invalid nodes
+        if (best == nullptr || n->latestAcceptedIndex > best->latestAcceptedIndex) // longer chain wins
+            best = n;                                                // new best node
+    } // end for
+    return best;                                                     // may be nullptr
+} // end of findReferenceNode
+
 //      - isActive()
+// Check if a user's node is active
+bool isActive(int userID) {                                          // true = active
+    User* u = users.search(userID);                                  // BST search
+    return (u != nullptr && u->activeStatus);                        // must exist and be active
+} // end of isActive
+
 //      - setNodeStatus()
+// Menu 3: set a node active or inactive
+void setNodeStatus() {                                               // asks ID and status
+    int id, status;                                                  // typed values
+    if (!readInt("Enter user/node ID: ", id)) return;                // read ID
+    if (users.search(id) == nullptr) { cout << "Error: user not found.\n"; return; } // must exist
+    if (!readInt("Enter status (1 = active, 0 = inactive): ", status)) return;       // read status
+    if (status != 0 && status != 1) { cout << "Error: status must be 0 or 1.\n"; return; } // must be 0 or 1
+    setStatus(id, status == 1);                                      // apply the change
+    cout << "Node " << id << " is now " << (status == 1 ? "ACTIVE" : "INACTIVE") << ".\n"; // confirm
+    if (status == 1) cout << "Tip: run 'Synchronize node' so it can update its copy.\n";   // hint
+} // end of setNodeStatus
 //
 // 2. Implement and improve consensus and voting:
 //      - runVoting()
