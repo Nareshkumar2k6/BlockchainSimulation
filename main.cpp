@@ -88,11 +88,153 @@ MEMBER 2: JANMESH KUMAR
 // RESPONSIBILITIES:
 // 1. Implement and improve transaction management:
 //      - TxQueue class
+  class TxQueue {                                                      // FIFO queue class
+private:                                                             // hidden members
+    QNode* front;                                                    // first item (leaves first)
+    QNode* rear;                                                     // last item (newest)
+    int count;                                                       // number of items
+
+public:                                                              // usable from outside
+    TxQueue() : front(nullptr), rear(nullptr), count(0) {}           // start empty
+    ~TxQueue() { clear(); }                                          // free memory at the end
+    TxQueue(const TxQueue&) = delete;                                // forbid copying
+    TxQueue& operator=(const TxQueue&) = delete;                     // forbid assigning
+
+    // Add transaction at the end
+    void enqueue(const Transaction& t) {                             // t = new transaction
+        QNode* n = new QNode{t, nullptr};                            // create the node
+        if (rear == nullptr) front = n;                              // first item: it is also the front
+        else rear->next = n;                                         // otherwise link after the old rear
+        rear = n;                                                    // new node is now the rear
+        count++;                                                     // one more item
+    } // end of enqueue
+
+    // Look at the first transaction (no removal)
+    bool peek(Transaction& out) {                                    // out receives a copy
+        if (front == nullptr) return false;                          // queue is empty
+        out = front->data;                                           // copy the first item
+        return true;                                                 // success
+    } // end of peek
+
+    // Remove the first transaction
+    bool dequeue(Transaction& out) {                                 // out receives removed item
+        if (front == nullptr) return false;                          // queue is empty
+        QNode* temp = front;                                         // remember the old front
+        out = temp->data;                                            // copy its data
+        front = front->next;                                         // move front forward
+        if (front == nullptr) rear = nullptr;                        // queue became empty
+        delete temp;                                                 // free the old node
+        count--;                                                     // one less item
+        return true;                                                 // success
+    } // end of dequeue
+
+    // Remove everything
+    void clear() {                                                   // empty the queue
+        Transaction t;                                               // dummy variable
+        while (dequeue(t)) {}                                        // dequeue until empty
+    } // end of clear
+
+    // Check if queue is empty
+    bool isEmpty() const { return count == 0; }                      // true when no items
+
+    // Number of pending transactions
+    int size() const { return count; }                               // return item count
+
+    // Copy first n items (nothing is removed)
+    vector<Transaction> firstN(int n) {                              // n = how many to copy
+        vector<Transaction> result;                                  // list to return
+        QNode* cur = front;                                          // start at the front
+        while (cur != nullptr && (int)result.size() < n) {           // until end or n items copied
+            result.push_back(cur->data);                             // copy this item
+            cur = cur->next;                                         // go to next item
+        } // end while
+        return result;                                               // give the copied list
+    } // end of firstN
+
+    // Total pending money of one sender
+    int pendingOutgoing(int senderID) {                              // senderID = user to check
+        int total = 0;                                               // running total
+        for (QNode* cur = front; cur != nullptr; cur = cur->next)    // visit every pending item
+            if (cur->data.senderID == senderID) total += cur->data.amount; // add this sender's amounts
+        return total;                                                // return the sum
+    } // end of pendingOutgoing
+
+    // Show pending list in arrival order
+    void display() {                                                 // print the queue
+        if (front == nullptr) { cout << "  (queue is empty)\n"; return; } // nothing to show
+        int pos = 1;                                                 // position counter
+        for (QNode* cur = front; cur != nullptr; cur = cur->next) {  // visit every item
+            cout << "  " << pos++ << ". Tx#" << cur->data.transactionID << "  "   // position and ID
+                 << cur->data.senderID << " -> " << cur->data.receiverID          // sender and receiver
+                 << "  amount: " << cur->data.amount << "\n";                      // amount
+        } // end for
+    } // end of display
+}; // end of class TxQueue
+
+
 //      - enqueue()
+void enqueue(const Transaction& t) {                             // t = new transaction
+        QNode* n = new QNode{t, nullptr};                            // create the node
+        if (rear == nullptr) front = n;                              // first item: it is also the front
+        else rear->next = n;                                         // otherwise link after the old rear
+        rear = n;                                                    // new node is now the rear
+        count++;                                                     // one more item
+    } // end of enqueue
+
 //      - dequeue()
+ // Remove the first transaction
+    bool dequeue(Transaction& out) {                                 // out receives removed item
+        if (front == nullptr) return false;                          // queue is empty
+        QNode* temp = front;                                         // remember the old front
+        out = temp->data;                                            // copy its data
+        front = front->next;                                         // move front forward
+        if (front == nullptr) rear = nullptr;                        // queue became empty
+        delete temp;                                                 // free the old node
+        count--;                                                     // one less item
+        return true;                                                 // success
+    } // end of dequeue
+
 //      - peek()
+  // Look at the first transaction (no removal)
+    bool peek(Transaction& out) {                                    // out receives a copy
+        if (front == nullptr) return false;                          // queue is empty
+        out = front->data;                                           // copy the first item
+        return true;                                                 // success
+    } // end of peek
+
 //      - firstN()
+  // Copy first n items (nothing is removed)
+    vector<Transaction> firstN(int n) {                              // n = how many to copy
+        vector<Transaction> result;                                  // list to return
+        QNode* cur = front;                                          // start at the front
+        while (cur != nullptr && (int)result.size() < n) {           // until end or n items copied
+            result.push_back(cur->data);                             // copy this item
+            cur = cur->next;                                         // go to next item
+        } // end while
+        return result;                                               // give the copied list
+    } // end of firstN
+
 //      - pendingOutgoing()
+ // Total pending money of one sender
+    int pendingOutgoing(int senderID) {                              // senderID = user to check
+        int total = 0;                                               // running total
+        for (QNode* cur = front; cur != nullptr; cur = cur->next)    // visit every pending item
+            if (cur->data.senderID == senderID) total += cur->data.amount; // add this sender's amounts
+        return total;                                                // return the sum
+    } // end of pendingOutgoing
+
+    // Show pending list in arrival order
+    void display() {                                                 // print the queue
+        if (front == nullptr) { cout << "  (queue is empty)\n"; return; } // nothing to show
+        int pos = 1;                                                 // position counter
+        for (QNode* cur = front; cur != nullptr; cur = cur->next) {  // visit every item
+            cout << "  " << pos++ << ". Tx#" << cur->data.transactionID << "  "   // position and ID
+                 << cur->data.senderID << " -> " << cur->data.receiverID          // sender and receiver
+                 << "  amount: " << cur->data.amount << "\n";                      // amount
+        } // end for
+    } // end of display
+}; // end of class TxQueue
+
 //
 // 2. Implement and improve transaction operations:
 //      - trySubmit()
