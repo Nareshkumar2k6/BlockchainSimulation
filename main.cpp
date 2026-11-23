@@ -88,8 +88,38 @@ MEMBER 2: JANMESH KUMAR
 // RESPONSIBILITIES:
 // 1. Implement and improve transaction management:
 //      - TxQueue class
+  class TxQueue {                                                      // FIFO queue class
+private:                                                             // hidden members
+    QNode* front;                                                    // first item (leaves first)
+    QNode* rear;                                                     // last item (newest)
+    int count;                                                       // number of items
+
+public:                                                              // usable from outside
+    TxQueue() : front(nullptr), rear(nullptr), count(0) {}           // start empty
+    ~TxQueue() { clear(); }                                          // free memory at the end
+    TxQueue(const TxQueue&) = delete;                                // forbid copying
+    TxQueue& operator=(const TxQueue&) = delete;                     // forbid assigning
+
 //      - enqueue()
+void enqueue(const Transaction& t) {                             // t = new transaction
+        QNode* n = new QNode{t, nullptr};                            // create the node
+        if (rear == nullptr) front = n;                              // first item: it is also the front
+        else rear->next = n;                                         // otherwise link after the old rear
+        rear = n;                                                    // new node is now the rear
+        count++;                                                     // one more item
+    } // end of enqueue
 //      - dequeue()
+ bool dequeue(Transaction& out) {                                 // out receives removed item
+        if (front == nullptr) return false;                          // queue is empty
+        QNode* temp = front;                                         // remember the old front
+        out = temp->data;                                            // copy its data
+        front = front->next;                                         // move front forward
+        if (front == nullptr) rear = nullptr;                        // queue became empty
+        delete temp;                                                 // free the old node
+        count--;                                                     // one less item
+        return true;                                                 // success
+    } // end of dequeue
+
 //      - peek()
 //      - firstN()
 //      - pendingOutgoing()
