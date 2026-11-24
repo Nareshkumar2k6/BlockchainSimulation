@@ -530,16 +530,249 @@ bool nodeVote(Node* n, const Block& b, string& reason) {             // reason =
 //
 // 3. Implement and improve blockchain synchronization:
 //      - doSync()
+// Verify and update a node's own copy
+bool syncNode(Node* n, bool verbose) {                               // verbose = print messages
+    if (!validateChain(n, verbose)) {                                // step 1: verify own copy
+        if (verbose) cout << "  Node " << n->userID << " has an invalid chain. Use 'Recover node' instead.\n"; // advice
+        return false;                                                // cannot sync a bad chain
+    } // end if
+    Node* ref = findReferenceNode(nullptr);                          // step 2: find best valid chain
+    if (ref == nullptr) {                                            // nobody is valid
+        if (verbose) cout << "  No valid reference chain available.\n"; // message
+        return false;                                                // stop
+    } // end if
+    Block* myTip = n->chain.getTail();                               // my newest block
+    Block* refTip = ref->chain.getTail();                            // reference newest block
+    if (n->latestAcceptedIndex == ref->latestAcceptedIndex) {        // same length
+        if (myTip->blockHash == refTip->blockHash) {                 // same tip hash
+            if (verbose) cout << "  Node " << n->userID << " is already up to date (tip index " << n->latestAcceptedIndex << ").\n"; // message
+            return true;                                             // nothing to do
+        } // end if
+        if (verbose) cout << "  Conflict: same length but different tip. Use 'Recover node'.\n"; // fork detected
+        return false;                                                // stop
+    } // end if
+    Block* refBlock = ref->chain.getBlock(n->latestAcceptedIndex);   // reference block at my tip index
+    if (refBlock == nullptr || refBlock->blockHash != myTip->blockHash) { // my chain must be a prefix
+        if (verbose) cout << "  Node's chain does not match reference (fork). Use 'Recover node'.\n"; // fork message
+        return false;                                                // stop
+    } // end if
+    int added = 0;                                                   // count of copied blocks
+    for (Block* cur = refBlock->next; cur != nullptr; cur = cur->next) { // each missing block
+        string reason;                                               // error text
+        n->chain.append(*cur);                                       // copy block to my chain
+        if (!applyBlock(*cur, n->balances, reason)) {                // update my balances
+            if (verbose) cout << "  Sync failed: " << reason << "\n"; // report problem
+            return false;                                            // stop
+        } // end if
+        n->latestAcceptedIndex = cur->index;                         // update my tip index
+        added++;                                                     // count it
+    } // end for
+    if (verbose) cout << "  Node " << n->userID << " synchronized. Blocks added: " << added  // final message
+                      << ". New tip index: " << n->latestAcceptedIndex << ".\n";          // new tip
+    logEvent("Node " + to_string(n->userID) + " synchronized, blocks added: " + to_string(added)); // record event
+    return true;                                                     // success
+} // end of syncNode
+// Menu 13: synchronize one node
+void syncMenu() {                                                    // asks node
+    Node* n = askNode("Enter node ID to synchronize: ");             // choose node
+    if (n == nullptr) return;                                        // invalid node
+    if (!isActive(n->userID)) { cout << "Error: node is inactive. Activate it first.\n"; return; } // must be active
+    Node* ref = findReferenceNode(nullptr);                          // best valid node
+    if (ref != nullptr && ref != n) {                                // show comparison before syncing
+        cout << "Comparison BEFORE synchronization:\n";              // heading
+        printComparison(n, ref);                                     // side-by-side view
+    } // end if
+    syncNode(n, true);                                               // verify and update
+} // end of syncMenu
+
 //      - synchronizeAll()
+// Menu 19: synchronize all active nodes
+void syncAllMenu() {                                                 // update every active node
+    for (size_t i = 0; i < nodes.size(); i++) {                      // each node
+        if (!isActive(nodes[i]->userID)) {                           // inactive nodes are skipped
+            cout << "  Node " << nodes[i]->userID << " is inactive: skipped.\n"; // message
+            continue;                                                // next node
+        } // end if
+        syncNode(nodes[i], true);                                    // verify and update
+    } // end for
+} // end of syncAllMenu
+
 //      - doRecover()
+// Restore a damaged node from a valid reference
+bool doRecover(Node* n, bool askConfirm) {                           // askConfirm = ask user first?
+    if (n == nullptr) return false;                                  // no node given
+    if (validateChain(n, false)) {                                   // node is healthy
+        cout << "Node " << n->userID << " is already valid. No recovery needed (use synchronize if outdated).\n"; // message
+        return false;                                                // nothing to do
+    } // end if
+    validateChain(n, true);                                          // show what is wrong
+    Node* ref = findReferenceNode(n);                                // best valid node (not itself)
+    if (ref == nullptr) { cout << "Error: no fully valid reference node is available.\n"; return false; } // none found
+    cout << "Reference node found: node " << ref->userID << " (tip index " << ref->latestAcceptedIndex << ").\n"; // info
+    if (askConfirm && !readYesNo("Replace node " + to_string(n->userID) + "'s chain with the reference copy? (y/n): ")) { // explicit user action
+        cout << "Recovery cancelled by user.\n";                     // message
+        return false;                                                // stop
+    } // end if
+    n->chain.copyFrom(ref->chain);                                   // copy the valid chain
+    n->latestAcceptedIndex = ref->latestAcceptedIndex;               // copy the tip index
+    rebuildBalances(n);                                              // rebuild balances from history
+    string event = "Recovery: node " + to_string(n->userID) + " restored from node " + to_string(ref->userID) + " at tip index " + to_string(n->latestAcceptedIndex); // event text
+    recoveryLog.push_back(event);                                    // save in recovery log
+    logEvent(event);                                                 // save in activity log
+    cout << event << "\n";                                           // show it
+    cout << "Check after recovery: " << (validateChain(n, false) ? "CHAIN VALID" : "STILL INVALID") << "\n"; // final check
+    return true;                                                     // recovered
+} // end of doRecover
 //
 // 4. Implement and improve node monitoring:
 //      - showNodeStatus()
+// Menu 16: node status, participation graph, recovery log
+void showNodeStatus() {                                              // overview of all nodes
+    cout << "Node status:\n";                                        // heading
+    for (size_t i = 0; i < nodes.size(); i++) {                      // each node
+        Node* n = nodes[i];                                          // current node
+        User* u = users.search(n->userID);                           // its user
+        cout << "  Node " << n->userID << " (" << u->displayName << ") | "              // id and name
+             << (u->activeStatus ? "ACTIVE  " : "INACTIVE") << " | blocks: " << n->chain.size() // status and length
+             << " | tip index: " << n->latestAcceptedIndex                              // tip index
+             << " | tip hash: " << shortHash(n->chain.getTail()->blockHash)             // tip hash
+             << " | " << (validateChain(n, false) ? "valid" : "INVALID") << "\n";       // validity
+    } // end for
+    cout << "Mining difficulty: " << difficulty << " | Pending transactions: " << pendingQueue.size() << "\n"; // settings
+    cout << "Voting participation graph:\n";                         // graph heading
+    for (size_t i = 0; i < nodes.size(); i++) {                      // each node
+        User* u = users.search(nodes[i]->userID);                    // its user
+        cout << "  Node " << nodes[i]->userID << " (" << u->displayName << ") YES " << pad(bar(nodes[i]->votesYes), 12) // YES bar
+             << nodes[i]->votesYes << " | NO " << pad(bar(nodes[i]->votesNo), 12) << nodes[i]->votesNo << "\n";       // NO bar
+    } // end for
+    cout << "Recovery events (" << recoveryLog.size() << "):\n";     // recovery heading
+    if (recoveryLog.empty()) cout << "  (none)\n";                   // no events
+    for (size_t i = 0; i < recoveryLog.size(); i++) cout << "  - " << recoveryLog[i] << "\n"; // list events
+} // end of showNodeStatus
+
 //      - viewNodeChain()
+// Menu 4: show the blockchain of a node
+void viewNodeChain() {                                               // linked list traversal
+    Node* n = askNode("Enter node (user) ID: ");                     // choose node
+    if (n == nullptr) return;                                        // invalid node
+    cout << "Blockchain of node " << n->userID << " (" << n->chain.size() << " blocks):\n"; // heading
+    for (Block* cur = n->chain.getHead(); cur != nullptr; cur = cur->next) { // walk from genesis
+        printBlock(*cur, false);                                     // print block
+        if (cur->next != nullptr) cout << "         |\n         v\n"; // arrow to next block
+    } // end for
+} // end of viewNodeChain
+
 //      - compareNodes()
+// Show two node copies side by side
+void printComparison(Node* a, Node* b) {                             // a and b = nodes to compare
+    cout << "Side-by-side comparison: node " << a->userID << " vs node " << b->userID << "\n"; // heading
+    cout << "  " << pad("Block", 7) << pad("Node " + to_string(a->userID), 18)     // column titles
+         << pad("Node " + to_string(b->userID), 18) << "Same?\n";                  // last column title
+    int lenA = a->chain.size();                                      // length of chain A
+    int lenB = b->chain.size();                                      // length of chain B
+    int maxLen = (lenA > lenB) ? lenA : lenB;                        // longer length
+    for (int i = 0; i < maxLen; i++) {                               // each block position
+        Block* x = a->chain.getBlock(i);                             // block i in A
+        Block* y = b->chain.getBlock(i);                             // block i in B
+        string sx = (x != nullptr) ? shortHash(x->blockHash) : "(missing)"; // text for A
+        string sy = (y != nullptr) ? shortHash(y->blockHash) : "(missing)"; // text for B
+        bool same = (x != nullptr && y != nullptr && x->blockHash == y->blockHash); // equal hashes?
+        cout << "  " << pad(to_string(i), 7) << pad(sx, 18) << pad(sy, 18) << (same ? "yes" : "NO") << "\n"; // print row
+    } // end for
+    cout << "  Chain valid? node " << a->userID << ": " << (validateChain(a, false) ? "yes" : "NO")   // validity of A
+         << " | node " << b->userID << ": " << (validateChain(b, false) ? "yes" : "NO") << "\n";     // validity of B
+    vector<User*> all;                                               // list of users
+    users.collectUsers(all);                                         // get all users
+    cout << "  Balances (user: node " << a->userID << " | node " << b->userID << "):\n"; // heading
+    for (size_t i = 0; i < all.size(); i++) {                        // each user
+        HNode* p = a->balances.find(all[i]->accountID);              // balance in A
+        HNode* q = b->balances.find(all[i]->accountID);              // balance in B
+        int pv = (p != nullptr) ? p->balance : 0;                    // value in A
+        int qv = (q != nullptr) ? q->balance : 0;                    // value in B
+        cout << "    User " << all[i]->userID << ": " << pv << " | " << qv     // print both values
+             << (pv != qv ? "   <-- different" : "") << "\n";       // mark differences
+    } // end for
+} // end of printComparison
+// Menu 18: compare two nodes side by side
+void compareMenu() {                                                 // asks two nodes
+    Node* a = askNode("Enter first node ID: ");                      // first node
+    if (a == nullptr) return;                                        // invalid node
+    Node* b = askNode("Enter second node ID: ");                     // second node
+    if (b == nullptr) return;                                        // invalid node
+    printComparison(a, b);                                           // show comparison
+} // end of compareMenu
+
 //      - display vote results
+    cout << "Voting on block " << candidate.index << " (" << voters.size() << " eligible active node(s)):\n"; // heading
+        if (yes) { cout << "YES\n"; approvers.push_back(voters[i]); voters[i]->votesYes++; } // count YES
+        else { cout << "NO  - " << reason << "\n"; voters[i]->votesNo++; }                    // count NO
+    cout << "Result: " << yesCount << " of " << total << " approved. "; // show result
+
 //
 // 5. Add and maintain consensus, synchronization,
+// Demo 5: voting fails because only 2 of 4 nodes approve
+void demoFailedVote() {                                              // tests T05
+    resetSimulation();                                               // fresh start
+    addUser(4, "D");                                                 // four nodes in total
+    demoStep("Step 1: block 1 approved by all 4 nodes.");            // step title
+    trySubmit(1, 2, 10);                                             // transaction
+    doMine(1);                                                       // mine
+    runVoting();                                                     // vote
+    demoStep("Step 2: tamper nodes 3 and 4 (2 of 4 nodes become bad)."); // step title
+    doTamper(findNode(3), 1);                                        // damage node 3
+    doTamper(findNode(4), 1);                                        // damage node 4
+    demoStep("Step 3: new block: only 2 of 4 approve (not a majority)."); // step title
+    trySubmit(2, 1, 5);                                              // transaction
+    doMine(1);                                                       // mine
+    runVoting();                                                     // vote fails
+    demoStep("Step 4: the transaction is still pending (not lost).");// step title
+    viewPending();                                                   // show queue
+    demoStep("Step 5: recover nodes 3 and 4.");                      // step title
+    doRecover(findNode(3), false);                                   // recover node 3
+    doRecover(findNode(4), false);                                   // recover node 4
+    demoStep("Step 6: vote the same transaction again (should pass)."); // step title
+    doMine(1);                                                       // mine again
+    runVoting();                                                     // vote passes
+} // end of demoFailedVote
+// Demo 3: inactive node and synchronization
+void demoInactiveSync() {                                            // tests T06 and sync
+    resetSimulation();                                               // fresh start
+    demoStep("Step 1: block 1 with all nodes active.");              // step title
+    trySubmit(1, 2, 10);                                             // transaction
+    doMine(1);                                                       // mine
+    runVoting();                                                     // vote
+    demoStep("Step 2: node 3 becomes inactive.");                    // step title
+    setStatus(3, false);                                             // deactivate node 3
+    demoStep("Step 3: block 2 while node 3 is inactive.");           // step title
+    trySubmit(2, 1, 5);                                              // transaction
+    doMine(2);                                                       // mine
+    runVoting();                                                     // vote (node 3 is skipped)
+    demoStep("Step 4: node 3 is now behind.");                       // step title
+    showNodeStatus();                                                // show status
+    demoStep("Step 5: reactivate node 3 and compare it with node 1."); // step title
+    setStatus(3, true);                                              // reactivate
+    printComparison(findNode(3), findNode(1));                       // side-by-side view
+    demoStep("Step 6: synchronize node 3.");                         // step title
+    syncNode(findNode(3), true);                                     // verify and update
+    showNodeStatus();                                                // show final status
+} // end of demoInactiveSync
+
 //    and node-recovery test cases.
+// Demo 4: tampering and recovery
+void demoTamperRecover() {                                           // tests T07 and T08
+    resetSimulation();                                               // fresh start
+    demoStep("Step 1: create block 1.");                             // step title
+    trySubmit(1, 2, 25);                                             // transaction
+    doMine(1);                                                       // mine
+    runVoting();                                                     // vote
+    demoStep("Step 2: tamper block 1 on node 2.");                   // step title
+    doTamper(findNode(2), 1);                                        // change the block
+    demoStep("Step 3: verify all nodes (node 2 must fail).");        // step title
+    verifyAllNodes();                                                // validate all
+    demoStep("Step 4: recover node 2 from a valid node.");           // step title
+    doRecover(findNode(2), false);                                   // recover without asking
+    demoStep("Step 5: verify all nodes again (all must be valid).");  // step title
+    verifyAllNodes();                                                // validate all
+} // end of demoTamperRecover
 //
 
