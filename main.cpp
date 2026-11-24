@@ -316,13 +316,72 @@ void enqueue(const Transaction& t) {                             // t = new tran
 //
 // 2. Implement and improve transaction operations:
 //      - trySubmit()
+// Validate a transaction and put it in the queue
+bool trySubmit(int sender, int receiver, int amount) {               // true = queued
+    string head = "Tx request " + to_string(sender) + " -> " + to_string(receiver) + " amount " + to_string(amount); // text for log
+    if (users.search(sender) == nullptr) return rejectTx(head, "sender is not registered");           // rule: unregistered sender
+    if (users.search(receiver) == nullptr) return rejectTx(head, "receiver is not registered (unknown recipient)"); // rule: unknown receiver
+    if (sender == receiver) return rejectTx(head, "self-transfer is not allowed");                    // rule: no self-transfer
+    if (amount <= 0) return rejectTx(head, "amount must be greater than zero");                       // rule: positive amount
+    Node* ref = findReferenceNode(nullptr);                          // valid node to read balances from
+    if (ref == nullptr) return rejectTx(head, "no valid ledger available to check balance"); // no valid ledger
+    HNode* bal = ref->balances.find(accountOf(sender));              // hash table lookup of sender
+    int confirmed = (bal != nullptr) ? bal->balance : 0;             // confirmed balance
+    int pending = pendingQueue.pendingOutgoing(sender);              // money already promised
+    int spendable = confirmed - pending;                             // money still free to spend
+    if (amount > spendable)                                          // rule: no overspending
+        return rejectTx(head, "insufficient balance (confirmed " + to_string(confirmed) + ", pending " + to_string(pending) + ", spendable " + to_string(spendable) + ")"); // explain numbers
+    Transaction t;                                                   // create the transaction
+    t.transactionID = nextTxID++;                                    // give a unique ID
+    t.senderID = sender;                                             // set sender
+    t.receiverID = receiver;                                         // set receiver
+    t.amount = amount;                                               // set amount
+    t.timestamp = (long long)time(nullptr);                          // set creation time
+    pendingQueue.enqueue(t);                                         // add at end of queue
+    cout << "Accepted: Tx#" << t.transactionID << " (" << sender << " -> " << receiver << ", " << amount  // success message
+         << ") added to pending queue (position " << pendingQueue.size() << "). Confirmed balance not changed yet.\n"; // note
+    logEvent(head + " ACCEPTED as Tx#" + to_string(t.transactionID));// record event
+    return true;                                                     // queued
+} // end of trySubmit
+
 //      - submitTransaction()
+void submitTransaction() {                                           // asks sender, receiver, amount
+    int sender, receiver, amount;                                    // typed values
+    if (!readInt("Enter sender ID: ", sender)) return;               // read sender
+    if (!readInt("Enter receiver ID: ", receiver)) return;           // read receiver
+    if (!readInt("Enter amount (whole units): ", amount)) return;    // read amount
+    trySubmit(sender, receiver, amount);                             // validate and queue
+} // end of submitTransaction
+
+
 //      - viewPending()
+void viewPending() {                                                 // queue traversal
+    cout << "Pending transactions (" << pendingQueue.size() << "):\n"; // heading
+    pendingQueue.display();                                          // print in arrival order
+} // end of viewPending
+
+
 //      - processTransactions()
+
 //
 // 3. Implement and improve account balance management:
 //      - BalanceTable class
+class BalanceTable {                                                 // hash table class
+private:                                                             // hidden members
+    HNode* buckets[HASH_SIZE];                                       // array of chain heads
+
+    // Hash function: key -> bucket number
+    int hashFunction(int key) const { return key % HASH_SIZE; }      // remainder picks the bucket
+
+public:                                                              // usable from outside
+    BalanceTable() { for (int i = 0; i < HASH_SIZE; i++) buckets[i] = nullptr; } // all buckets start empty
+    ~BalanceTable() { clear(); }                                     // free memory at the end
+    BalanceTable(const BalanceTable&) = delete;                      // forbid copying
+    BalanceTable& operator=(const BalanceTable&) = delete;           // forbid assigning
+
+
 //      - insert()
+
 //      - search()
 //      - update()
 //      - printAllBalances()
