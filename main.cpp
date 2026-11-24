@@ -164,9 +164,90 @@ void setNodeStatus() {                                               // asks ID 
 //
 // 2. Implement and improve consensus and voting:
 //      - runVoting()
+// Run the voting round for the candidate
+bool runVoting() {                                                   // true = block approved
+    if (!hasCandidate) { cout << "No candidate block. Mine a block first.\n"; return false; } // nothing to vote on
+    vector<Transaction> front = pendingQueue.firstN((int)candidate.txList.size()); // first queue items
+    bool same = (front.size() == candidate.txList.size());           // sizes must match
+    for (size_t i = 0; same && i < front.size(); i++)                // compare item by item
+        if (txToString(front[i]) != txToString(candidate.txList[i])) same = false; // content changed
+    if (!same) {                                                     // candidate is outdated
+        cout << "Candidate does not match the pending queue (transactions changed). Candidate discarded.\n"; // message
+        logEvent("Candidate discarded: transactions changed");       // record event
+        hasCandidate = false;                                        // remove candidate
+        return false;                                                // stop
+    } // end if
+    vector<Node*> voters;                                            // snapshot of active nodes
+    for (size_t i = 0; i < nodes.size(); i++)                        // check every node
+        if (isActive(nodes[i]->userID)) voters.push_back(nodes[i]);  // keep active ones
+    if (voters.empty()) { cout << "No active voters. Block cannot be approved.\n"; return false; } // nobody can vote
+    cout << "Voting on block " << candidate.index << " (" << voters.size() << " eligible active node(s)):\n"; // heading
+    vector<Node*> approvers;                                         // nodes that said YES
+    for (size_t i = 0; i < voters.size(); i++) {                     // each voter
+        string reason;                                               // reason for NO
+        bool yes = nodeVote(voters[i], candidate, reason);           // ask the node
+        User* u = users.search(voters[i]->userID);                   // for the name
+        cout << "  Node " << voters[i]->userID << " (" << u->displayName << "): ";  // voter name
+        if (yes) { cout << "YES\n"; approvers.push_back(voters[i]); voters[i]->votesYes++; } // count YES
+        else { cout << "NO  - " << reason << "\n"; voters[i]->votesNo++; }                    // count NO
+    } // end for
+    int yesCount = (int)approvers.size();                            // number of YES votes
+    int total = (int)voters.size();                                  // number of eligible voters
+    cout << "Result: " << yesCount << " of " << total << " approved. "; // show result
+    bool approved = (yesCount * 2 > total);                          // strict majority rule
+    if (approved) {                                                  // block accepted
+        cout << "MAJORITY REACHED -> block approved.\n";             // message
+        for (size_t i = 0; i < approvers.size(); i++) {              // each approving node
+            string reason;                                           // error text
+            approvers[i]->chain.append(candidate);                   // add block to its chain
+            applyBlock(candidate, approvers[i]->balances, reason);   // update its balances
+            approvers[i]->latestAcceptedIndex = candidate.index;     // update its tip index
+        } // end for
+        Transaction removed;                                         // dummy variable
+        for (size_t i = 0; i < candidate.txList.size(); i++) pendingQueue.dequeue(removed); // remove used transactions
+        cout << "Block " << candidate.index << " added to " << approvers.size() << " node(s). Miner "  // result line
+             << candidate.minerID << " received reward " << MINING_REWARD << ".\n";                    // reward note
+        cout << "Other nodes (inactive or outdated) can be synchronized later.\n";                     // hint
+        logEvent("Block " + to_string(candidate.index) + " APPROVED " + to_string(yesCount) + "/" + to_string(total)); // record event
+    } else {                                                         // block rejected
+        cout << "NOT ENOUGH VOTES -> block rejected. Chains, balances and queue are unchanged.\n";     // message
+        logEvent("Block " + to_string(candidate.index) + " REJECTED " + to_string(yesCount) + "/" + to_string(total)); // record event
+    } // end if-else
+    hasCandidate = false;                                            // candidate is finished
+    return approved;                                                 // tell the result
+} // end of runVoting
 //      - vote handling functions
+// Ask one node to vote on a block
+bool nodeVote(Node* n, const Block& b, string& reason) {             // reason = why NO
+    if (!validateChain(n, false)) { reason = "own chain is invalid"; return false; }                       // node must be healthy
+    Block* tip = n->chain.getTail();                                 // node's newest block
+    if (b.index != tip->index + 1) { reason = "sequence number does not match (node is outdated)"; return false; } // index check
+    if (b.previousHash != tip->blockHash) { reason = "previous hash does not match node's tip"; return false; }    // link check
+    if (calculateHash(b) != b.blockHash) { reason = "block hash is wrong"; return false; }                 // hash check
+    if (b.difficulty != difficulty) { reason = "difficulty is not the required one"; return false; }       // difficulty check
+    if (!hasLeadingZeros(b.blockHash, b.difficulty)) { reason = "hash does not meet difficulty"; return false; } // proof of work
+    if (b.txList.empty()) { reason = "block has no transactions"; return false; }                          // empty block
+    for (size_t i = 0; i < b.txList.size(); i++)                     // each new transaction
+        for (Block* cur = n->chain.getHead(); cur != nullptr; cur = cur->next) // each old block
+            for (size_t j = 0; j < cur->txList.size(); j++)          // each old transaction
+                if (cur->txList[j].transactionID == b.txList[i].transactionID) { // same ID already in chain
+                    reason = "transaction already exists in chain";  // set reason
+                    return false;                                    // vote NO
+                } // end if
+    BalanceTable temp;                                               // temporary table
+    temp.copyFrom(n->balances);                                      // copy node's balances
+    string why;                                                      // error text
+    if (!applyBlock(b, temp, why)) { reason = why; return false; }   // transfers must be valid
+    return true;                                                     // vote YES
+} // end of nodeVote
 //      - majority approval validation
+    bool approved = (yesCount * 2 > total);                          // strict majority rule
 //      - rejected block handling
+    } else {                                                         // block rejected
+        cout << "NOT ENOUGH VOTES -> block rejected. Chains, balances and queue are unchanged.\n";     // message
+        logEvent("Block " + to_string(candidate.index) + " REJECTED " + to_string(yesCount) + "/" + to_string(total)); // record event
+    } // end if-else
+    if (voters.empty()) { cout << "No active voters. Block cannot be approved.\n"; return false; } // nobody can vote
 //
 // 3. Implement and improve blockchain synchronization:
 //      - doSync()
