@@ -63,7 +63,15 @@ string sha256(const string& input) {                                 // input te
     return out.str();                                                // return the final 64-character hash
 }
 //      - calculateHash()
+string calculateHash(const Block& b) {                               // block -> hash
+    return sha256(blockToString(b));                                 // hash the block text
+} // end of calculateHash
 //      - hasLeadingZeros()
+bool hasLeadingZeros(const string& hash, int d) {                    // d = required zeros
+    for (int i = 0; i < d; i++)                                      // check first d characters
+        if (hash[i] != '0') return false;                            // any non-zero means failure
+    return true;                                                     // all were zeros
+} // end of hasLeadingZeros
 //
 // 2. Implement and maintain blockchain data structures:
 //      - Chain class
@@ -71,10 +79,80 @@ string sha256(const string& input) {                                 // input te
 //      - getBlock()
 //      - getHead()
 //      - getTail()
+class Chain {                                                        // singly linked list of blocks
+private:                                                             // hidden members
+    Block* head;                                                     // first block (genesis)
+    Block* tail;                                                     // last block (newest)
+    int length;                                                      // number of blocks
+
+public:                                                              // usable from outside
+    Chain() : head(nullptr), tail(nullptr), length(0) {}             // start empty
+    ~Chain() { clear(); }                                            // free memory at the end
+    Chain(const Chain&) = delete;                                    // forbid copying
+    Chain& operator=(const Chain&) = delete;                         // forbid assigning
+
+    // Add a copy of a block at the end
+    void append(const Block& b) {                                    // b = block to copy
+        Block* n = new Block(b);                                     // make a new block copy
+        n->next = nullptr;                                           // it is the last block
+        if (head == nullptr) head = tail = n;                        // first block: head and tail
+        else { tail->next = n; tail = n; }                           // otherwise link after old tail
+        length++;                                                    // one more block
+    } // end of append
+
+    // Delete all blocks
+    void clear() {                                                   // empty the chain
+        Block* cur = head;                                           // start at the first block
+        while (cur != nullptr) {                                     // walk the list
+            Block* temp = cur;                                       // remember current block
+            cur = cur->next;                                         // move to next block
+            delete temp;                                             // free remembered block
+        } // end while
+        head = tail = nullptr;                                       // list is empty
+        length = 0;                                                  // no blocks left
+    } // end of clear
+
+    // Make a deep copy of another chain
+    void copyFrom(const Chain& other) {                              // other = source chain
+        if (this == &other) return;                                  // copying itself is useless
+        clear();                                                     // remove old blocks
+        for (Block* cur = other.head; cur != nullptr; cur = cur->next) // each block of source
+            append(*cur);                                            // copy it to the end
+    } // end of copyFrom
+
+    // Find a block by its index (traversal)
+    Block* getBlock(int index) const {                               // returns nullptr if missing
+        for (Block* cur = head; cur != nullptr; cur = cur->next)     // walk the list
+            if (cur->index == index) return cur;                     // found the block
+        return nullptr;                                              // no such block
+    } // end of getBlock
+
+    Block* getHead() const { return head; }                          // first block
+    Block* getTail() const { return tail; }                          // last block
+    int size() const { return length; }                              // number of blocks
+}; // end of class Chain
 //
 // 3. Implement and maintain block operations:
 //      - mineNonce()
+bool mineNonce(Block& b, int diff, long long& trials) {              // trials = number of hashes tried
+    trials = 0;                                                      // start counting
+    for (int nonce = 0; nonce < MAX_ATTEMPTS; nonce++) {             // try nonce values one by one
+        b.nonce = nonce;                                             // set the nonce
+        b.blockHash = calculateHash(b);                              // calculate the hash
+        trials++;                                                    // count this try
+        if (hasLeadingZeros(b.blockHash, diff)) return true;         // hash is good: done
+    } // end for
+    return false;                                                    // attempt limit reached (cancelled)
+} // end of mineNonce
+
+
 //      - doMine()
+// Build and mine a candidate block
+bool doMine(int minerID) {                                           // true = candidate ready
+    if (hasCandidate) {                                              // a candidate already waits
+        cout << "A candidate block already exists (conflicting candidate). Run the voting round first.\n"; // message
+        return false;                                                // stop
+    }
 //      - verifyChain()
 //      - validateBlock()
 //
