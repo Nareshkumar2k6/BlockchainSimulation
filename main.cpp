@@ -1,6 +1,26 @@
-#include <iostream>
+#include <iostream>   // cin and cout: keyboard input and screen output
+#include <string>     // string class: stores text
+#include <vector>     // vector class: dynamic array
+#include <ctime>      // time() and localtime(): current time and date text
+#include <chrono>     // steady_clock: measure running time in tests
+#include <sstream>    // ostringstream: builds the hash text
+#include <iomanip>    // setw, setfill, setprecision: output formatting
 #include <cstdint>    // uint32_t, uint64_t: fixed-size integers for SHA-256
-using namespace std;
+#include <cmath>      // log10: used to draw the text graph
+#include <fstream>    // ofstream: writes the export files
+using namespace std;  // use standard names without writing std:: each time
+
+
+//==============================================================
+//  SETTINGS (constants)
+//==============================================================
+const int START_BALANCE    = 100;      // money every account starts with
+const int MINING_REWARD    = 10;       // reward the miner gets per block
+const int MAX_TX_PER_BLOCK = 3;        // maximum transactions in one block
+const int MAX_DIFFICULTY   = 4;        // highest allowed mining difficulty
+const int MAX_ATTEMPTS     = 1000000;  // mining stops after this many tries
+const int HASH_SIZE        = 11;       // number of buckets in the hash table
+
 
 
 MEMBER 1: NARESH KUMAR (PROJECT LEADER)
@@ -62,6 +82,65 @@ string sha256(const string& input) {                                 // input te
     for (int i = 0; i < 8; i++) out << hex << setw(8) << setfill('0') << h[i]; // write each value as 8 hex digits
     return out.str();                                                // return the final 64-character hash
 }
+
+//==============================================================
+//  PART 2 : RECORDS (User, Transaction, Block)
+//==============================================================
+struct User {                          // one registered user
+    int userID;                        // unique ID (BST key)
+    string displayName;                // name shown on screen
+    int accountID;                     // account number used in the hash table
+    bool activeStatus;                 // true = active node, false = inactive node
+}; // end of User
+
+struct Transaction {                   // one money transfer
+    int transactionID;                 // unique ID of this transaction
+    int senderID;                      // user who sends money
+    int receiverID;                    // user who receives money
+    int amount;                        // whole units only
+    long long timestamp;               // time when it was created
+}; // end of Transaction
+
+struct Block {                         // one block of the chain (linked list node)
+    int index = 0;                     // position of block in chain
+    string previousHash;               // hash of the previous block
+    vector<Transaction> txList;        // transactions stored in this block
+    int minerID = 0;                   // user who mined this block
+    int nonce = 0;                     // number tried during mining
+    int difficulty = 0;                // required leading zeros in hash
+    long long timestamp = 0;           // time when block was created
+    string blockHash;                  // hash of this block
+    Block* next = nullptr;             // pointer to the next block
+}; // end of Block
+
+// Convert a time number into readable date text
+string timeToText(long long t) {                                     // t = seconds since 1970
+    if (t == 0) return "fixed (genesis)";                            // genesis block uses a fixed time
+    time_t raw = (time_t)t;                                          // convert to system time type
+    char buffer[32];                                                 // space for the date text
+    struct tm* info = localtime(&raw);                               // break time into year, month, day...
+    if (info == nullptr) return to_string(t);                        // if conversion fails, show the number
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", info);     // format as YYYY-MM-DD HH:MM:SS
+    return string(buffer);                                           // return the text
+} // end of timeToText
+
+// Convert one transaction to text
+string txToString(const Transaction& t) {                            // used for hashing and comparing
+    return to_string(t.transactionID) + ":" + to_string(t.senderID) + ":" +   // id and sender
+           to_string(t.receiverID) + ":" + to_string(t.amount) + ":" +        // receiver and amount
+           to_string(t.timestamp);                                            // creation time
+} // end of txToString
+
+// Convert block data to text (always the same order)
+string blockToString(const Block& b) {                               // text that will be hashed
+    string s = to_string(b.index) + "|" + b.previousHash + "|";      // start with index and previous hash
+    for (size_t i = 0; i < b.txList.size(); i++) s += txToString(b.txList[i]) + ";"; // add every transaction in order
+    s += "|" + to_string(b.minerID) + "|" + to_string(b.nonce) + "|" +  // add miner and nonce
+         to_string(b.difficulty) + "|" + to_string(b.timestamp);        // add difficulty and time
+    return s;                                                        // return full block text
+} // end of blockToString
+
+
 //      - calculateHash()
 string calculateHash(const Block& b) {                               // block -> hash
     return sha256(blockToString(b));                                 // hash the block text
@@ -153,7 +232,57 @@ bool doMine(int minerID) {                                           // true = c
         cout << "A candidate block already exists (conflicting candidate). Run the voting round first.\n"; // message
         return false;                                                // stop
     }
+  if (pendingQueue.isEmpty()) { cout << "Pending queue is empty. No block can be mined.\n"; return false; } // nothing to mine
+    if (users.search(minerID) == nullptr) { cout << "Error: miner is not registered.\n"; return false; }     // unknown miner
+    if (!isActive(minerID)) { cout << "Error: miner node is inactive.\n"; return false; }                    // inactive miner
+    Node* ref = findReferenceNode(nullptr);                          // valid chain to build on
+    if (ref == nullptr) { cout << "Error: no valid chain available to build on.\n"; return false; }          // none available
+    Block* tip = ref->chain.getTail();                               // newest block
+    Block b;                                                         // new candidate block
+    b.index = tip->index + 1;                                        // next index
+    b.previousHash = tip->blockHash;                                 // link to the tip
+    b.txList = pendingQueue.firstN(MAX_TX_PER_BLOCK);                // copy first transactions (not removed yet)
+    b.minerID = minerID;                                             // who mines
+    b.difficulty = difficulty;                                       // current difficulty
+    b.timestamp = (long long)time(nullptr);                          // creation time
+    cout << "Mining block " << b.index << " with " << b.txList.size() << " transaction(s) at difficulty " << difficulty << "...\n"; // info
+    long long trials;                                                // number of tries
+    double t0 = nowMicros();                                         // start time
+    bool found = mineNonce(b, difficulty, trials);                   // search the nonce
+    double ms = (nowMicros() - t0) / 1000.0;                         // time used in milliseconds
+    if (!found) {                                                    // limit reached
+        cout << "Mining cancelled: attempt limit (" << MAX_ATTEMPTS << ") reached. Nothing was changed.\n"; // message
+        logEvent("Mining cancelled at attempt limit");               // record event
+        return false;                                                // stop
+    } // end if
+    candidate = b;                                                   // store the candidate
+    candidate.next = nullptr;                                        // not linked to any chain yet
+    hasCandidate = true;                                             // mark candidate as ready
+    cout << "Mining successful!\n";                                  // success title
+    cout << "  Nonce  : " << b.nonce << "\n";                        // show nonce
+    cout << "  Hash   : " << b.blockHash << "\n";                    // show hash
+    cout << "  Trials : " << trials << "\n";                         // show tries
+    cout << "  Time   : " << fixed << setprecision(2) << ms << " ms\n"; // show time
+    cout << "Candidate is ready. Run the voting round.\n";           // next step hint
+    logEvent("Block " + to_string(b.index) + " mined by " + to_string(minerID) + " (nonce " + to_string(b.nonce) + ", trials " + to_string(trials) + ")"); // record event
+    return true;                                                     // success
+} // end of doMine
 //      - verifyChain()
+void verifyChain() {                                                 // asks one or all
+    cout << "Verify (1 = one node, 2 = all nodes): ";                // question
+    int choice;                                                      // typed choice
+    if (!readInt("", choice)) return;                                // read choice
+    if (choice == 1) {                                               // one node
+        Node* n = askNode("Enter node ID: ");                        // choose node
+        if (n == nullptr) return;                                    // invalid node
+        bool ok = validateChain(n, true);                            // validate
+        cout << "Node " << n->userID << ": " << (ok ? "CHAIN VALID" : "CHAIN INVALID (tampering or error detected)") << "\n"; // result
+    } else if (choice == 2) {                                        // all nodes
+        verifyAllNodes();                                            // validate all
+    } else {                                                         // anything else
+        cout << "Invalid choice.\n";                                 // message
+    } // end if-else
+} // end of verifyChain
 //      - validateBlock()
 //
 // 4. Integrate all members' code into the main project.
@@ -812,3 +941,54 @@ void demoTamperRecover() {                                           // tests T0
 } // end of demoTamperRecover
 //
 
+
+
+
+int main() {                                                         // entry point
+    resetSimulation();                                               // create users A, B, C and genesis
+    cout << "Blockchain Simulation started.\n";                      // welcome line 1
+    cout << "Genesis block created. Test nodes A(1), B(2), C(3) created, each with balance " << START_BALANCE << ".\n"; // welcome line 2
+    cout << "Rules: block size = " << MAX_TX_PER_BLOCK << " tx, mining reward = " << MINING_REWARD  // welcome line 3
+         << ", default difficulty = " << difficulty << ".\n";        // welcome line 3 (end)
+    while (!inputEnded) {                                            // repeat until input ends or user exits
+        showMenu();                                                  // show options
+        int choice;                                                  // typed option
+        if (!readInt("Enter choice: ", choice)) continue;            // invalid number: show menu again
+        cout << "\n";                                                // blank line for readability
+        switch (choice) {                                            // run the chosen action
+            case 1:  registerUser();       break;                    // register user
+            case 2:  searchUsers();        break;                    // search / list users
+            case 3:  setNodeStatus();      break;                    // set status
+            case 4:  viewNodeChain();      break;                    // view chain
+            case 5:  submitTransaction();  break;                    // submit transaction
+            case 6:  viewPending();        break;                    // view queue
+            case 7:  setDifficulty();      break;                    // set difficulty
+            case 8:  mineBlock();          break;                    // mine block
+            case 9:  runVoting();          break;                    // voting round
+            case 10: checkBalance();       break;                    // check balance
+            case 11: verifyChain();        break;                    // verify chain
+            case 12: tamperDemo();         break;                    // tamper demo
+            case 13: syncMenu();           break;                    // synchronize node
+            case 14: recoverMenu();        break;                    // recover node
+            case 15: showHistory();        break;                    // history
+            case 16: showNodeStatus();     break;                    // node status and graph
+            case 17: showHashTable();      break;                    // hash table view
+            case 18: compareMenu();        break;                    // compare nodes
+            case 19: syncAllMenu();        break;                    // synchronize all
+            case 20: demoMenu();           break;                    // demo scenarios
+            case 21: viewActivityLog();    break;                    // activity log
+            case 22: exportData();         break;                    // export files
+            case 23: runSelfTests();       break;                    // self tests
+            case 24: performanceTest();    break;                    // performance test
+            case 25: resetMenu();          break;                    // reset
+            case 0:                                                  // exit
+                cout << "Goodbye!\n";                                // farewell
+                cleanup();                                           // free memory
+                return 0;                                            // end program
+            default:                                                 // any other number
+                cout << "Invalid menu choice. Please enter a number from 0 to 25.\n"; // error message
+        } // end switch
+    } // end while
+    cleanup();                                                       // free memory when input ends
+    return 0;                                                        // end program
+} // end of main
