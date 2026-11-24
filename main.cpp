@@ -381,10 +381,46 @@ public:                                                              // usable f
 
 
 //      - insert()
+void insert(int accountID, int balance) {                        // key and value
+        HNode* existing = find(accountID);                           // already stored?
+        if (existing != nullptr) { existing->balance = balance; return; } // yes: just update value
+        int i = hashFunction(accountID);                             // choose the bucket
+        buckets[i] = new HNode{accountID, balance, buckets[i]};      // add new entry at the chain head (handles collisions)
+    } // end of insert
+
 
 //      - search()
+ User* search(int id) {                                           // returns nullptr if not found
+        BSTNode* cur = root;                                         // start at the top
+        while (cur != nullptr) {                                     // walk down the tree
+            if (id == cur->data.userID) return &cur->data;           // found the user
+            if (id < cur->data.userID) cur = cur->left;              // smaller: go left
+            else cur = cur->right;                                   // bigger: go right
+        } // end while
+        return nullptr;                                              // not in the tree
+    } // end of search
+
 //      - update()
+ bool update(int accountID, int newBalance) {                     // returns false if missing
+        HNode* e = find(accountID);                                  // look for the entry
+        if (e == nullptr) return false;                              // not found
+        e->balance = newBalance;                                     // store new balance
+        return true;                                                 // success
+    } // end of update
 //      - printAllBalances()
+void printAllBalances(Node* n) {                                     // n = node to read from
+    vector<User*> all;                                               // list of users
+    users.collectUsers(all);                                         // get all users
+    cout << "Balances on node " << n->userID << ":\n";               // heading
+    for (size_t i = 0; i < all.size(); i++) {                        // each user
+        HNode* e = n->balances.find(all[i]->accountID);              // hash table lookup
+        cout << "  User " << all[i]->userID << " (" << all[i]->displayName << ") account "  // who
+             << all[i]->accountID << ": confirmed " << (e != nullptr ? e->balance : 0)     // confirmed money
+             << " | pending out " << pendingQueue.pendingOutgoing(all[i]->userID) << "\n"; // waiting payments
+    } // end for
+} // end of printAllBalances
+
+
 //
 // 4. Handle transaction validation:
 //      - Check sender and receiver IDs.
