@@ -647,30 +647,30 @@ Node* askNode(const string& prompt) {                                // returns 
 bool applyBlock(const Block& b, BalanceTable& table, string& reason) {   // reason = error text
     for (size_t i = 0; i < b.txList.size(); i++) {                   // every transaction in the block
         const Transaction& t = b.txList[i];                          // short name for current one
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        User* s = users.search(t.senderID);                          // find sender
+        User* r = users.search(t.receiverID);                        // find receiver
+        if (s == nullptr || r == nullptr) {                          // someone not registered
+            reason = "Tx#" + to_string(t.transactionID) + " has unregistered user"; // set reason
+            return false;                                            // block invalid
+        } // end if
+        if (t.senderID == t.receiverID) {                            // self-transfer
+            reason = "Tx#" + to_string(t.transactionID) + " is a self-transfer";    // set reason
+            return false;                                            // block invalid
+        } // end if
+        if (t.amount <= 0) {                                         // zero or negative amount
+            reason = "Tx#" + to_string(t.transactionID) + " has non-positive amount"; // set reason
+            return false;                                            // block invalid
+        } // end if
+        HNode* sb = table.find(s->accountID);                        // sender's balance entry
+        HNode* rb = table.find(r->accountID);                        // receiver's balance entry
+        if (sb == nullptr || rb == nullptr) {                        // account missing in table
+            reason = "Tx#" + to_string(t.transactionID) + " account not in balance table"; // set reason
+            return false;                                            // block invalid
+        } // end if
+        if (sb->balance < t.amount) {                                // sender cannot pay
+            reason = "Tx#" + to_string(t.transactionID) + " sender has insufficient balance"; // set reason
+            return false;                                            // block invalid
+        } // end if
         table.update(s->accountID, sb->balance - t.amount);          // take money from sender
         table.update(r->accountID, rb->balance + t.amount);          // give money to receiver
     } // end for
@@ -716,13 +716,13 @@ bool validateChain(Node* n, bool verbose) {                          // true = c
         string reason;                                               // error text
         if (!checkBlockLinks(*cur, *prev, reason))                   // check hash, link, difficulty
             return failMsg(verbose, "Block " + to_string(cur->index) + ": " + reason); // report problem
-
-
-
-
-
-
-
+        for (size_t i = 0; i < cur->txList.size(); i++) {            // check duplicate transaction IDs
+            int id = cur->txList[i].transactionID;                   // this transaction's ID
+            for (size_t j = 0; j < seenIDs.size(); j++)              // compare with earlier IDs
+                if (seenIDs[j] == id)                                // same ID found twice
+                    return failMsg(verbose, "Block " + to_string(cur->index) + ": duplicate transaction ID " + to_string(id)); // report problem
+            seenIDs.push_back(id);                                   // remember this ID
+        } // end for
         if (!applyBlock(*cur, replay, reason))                       // replay the transfers
             return failMsg(verbose, "Block " + to_string(cur->index) + ": " + reason); // report problem
         prev = cur;                                                  // current becomes previous
@@ -939,18 +939,18 @@ bool rejectTx(const string& head, const string& reason) {            // head = r
 // Validate a transaction and put it in the queue
 bool trySubmit(int sender, int receiver, int amount) {               // true = queued
     string head = "Tx request " + to_string(sender) + " -> " + to_string(receiver) + " amount " + to_string(amount); // text for log
-
-
-
-
-
-
-
-
-
-
-
-
+    if (users.search(sender) == nullptr) return rejectTx(head, "sender is not registered");           // rule: unregistered sender
+    if (users.search(receiver) == nullptr) return rejectTx(head, "receiver is not registered (unknown recipient)"); // rule: unknown receiver
+    if (sender == receiver) return rejectTx(head, "self-transfer is not allowed");                    // rule: no self-transfer
+    if (amount <= 0) return rejectTx(head, "amount must be greater than zero");                       // rule: positive amount
+    Node* ref = findReferenceNode(nullptr);                          // valid node to read balances from
+    if (ref == nullptr) return rejectTx(head, "no valid ledger available to check balance"); // no valid ledger
+    HNode* bal = ref->balances.find(accountOf(sender));              // hash table lookup of sender
+    int confirmed = (bal != nullptr) ? bal->balance : 0;             // confirmed balance
+    int pending = pendingQueue.pendingOutgoing(sender);              // money already promised
+    int spendable = confirmed - pending;                             // money still free to spend
+    if (amount > spendable)                                          // rule: no overspending
+        return rejectTx(head, "insufficient balance (confirmed " + to_string(confirmed) + ", pending " + to_string(pending) + ", spendable " + to_string(spendable) + ")"); // explain numbers
     Transaction t;                                                   // create the transaction
     t.transactionID = nextTxID++;                                    // give a unique ID
     t.senderID = sender;                                             // set sender
@@ -1028,13 +1028,13 @@ bool nodeVote(Node* n, const Block& b, string& reason) {             // reason =
     if (b.difficulty != difficulty) { reason = "difficulty is not the required one"; return false; }       // difficulty check
     if (!hasLeadingZeros(b.blockHash, b.difficulty)) { reason = "hash does not meet difficulty"; return false; } // proof of work
     if (b.txList.empty()) { reason = "block has no transactions"; return false; }                          // empty block
-
-
-
-
-
-
-
+    for (size_t i = 0; i < b.txList.size(); i++)                     // each new transaction
+        for (Block* cur = n->chain.getHead(); cur != nullptr; cur = cur->next) // each old block
+            for (size_t j = 0; j < cur->txList.size(); j++)          // each old transaction
+                if (cur->txList[j].transactionID == b.txList[i].transactionID) { // same ID already in chain
+                    reason = "transaction already exists in chain";  // set reason
+                    return false;                                    // vote NO
+                } // end if
     BalanceTable temp;                                               // temporary table
     temp.copyFrom(n->balances);                                      // copy node's balances
     string why;                                                      // error text
@@ -1470,18 +1470,18 @@ void demoRejected() {                                                // tests T0
     resetSimulation();                                               // fresh start
     demoStep("T04: mine with an empty queue.");                      // step title
     doMine(1);                                                       // must fail
-
-
-
-
-
-
-
-
-
-
-
-
+    demoStep("T03: invalid transactions (all must be rejected).");   // step title
+    trySubmit(99, 1, 10);                                            // unregistered sender
+    trySubmit(1, 99, 10);                                            // unknown recipient
+    trySubmit(1, 1, 10);                                             // self-transfer
+    trySubmit(1, 2, 0);                                              // zero amount
+    trySubmit(1, 2, -5);                                             // negative amount
+    trySubmit(1, 2, 500);                                            // amount too high
+    demoStep("T09: repeated payments from the same sender (balance 100)."); // step title
+    trySubmit(1, 2, 80);                                             // accepted
+    trySubmit(1, 3, 30);                                             // rejected: pending 80 + 30 > 100
+    trySubmit(1, 3, 20);                                             // accepted: exactly 100 in total
+    viewPending();                                                   // show queue
 } // end of demoRejected
 
 // Demo 3: inactive node and synchronization
@@ -1602,18 +1602,18 @@ void runSelfTests() {                                                // does not
     t.collectUsers(list);                                            // in-order traversal
     check(list.size() == 3 && list[0]->userID == 20 && list[1]->userID == 50 && list[2]->userID == 70, "BST in-order is sorted"); // order test
 
-
-
-
-
-
-
-
-
-
-
-
-
+    TxQueue q;                                                       // temporary queue
+    Transaction t1{1, 1, 2, 10, 0}, t2{2, 2, 3, 20, 0}, t3{3, 1, 3, 5, 0}, out; // test transactions
+    check(q.isEmpty(), "Queue starts empty");                        // empty test
+    q.enqueue(t1); q.enqueue(t2); q.enqueue(t3);                     // add three items
+    check(q.size() == 3, "Queue size after 3 enqueue");              // size test
+    check(q.peek(out) && out.transactionID == 1 && q.size() == 3, "Queue peek does not remove"); // peek test
+    check(q.pendingOutgoing(1) == 15, "Queue pending outgoing of sender 1"); // pending test
+    check(q.firstN(2).size() == 2 && q.size() == 3, "Queue firstN does not remove"); // firstN test
+    check(q.dequeue(out) && out.transactionID == 1, "Queue dequeue gives first item"); // FIFO test 1
+    check(q.dequeue(out) && out.transactionID == 2, "Queue keeps FIFO order");         // FIFO test 2
+    q.dequeue(out);                                                  // remove last item
+    check(!q.dequeue(out), "Queue dequeue on empty returns false");  // empty dequeue test
 
     BalanceTable h;                                                  // temporary hash table
     h.insert(5, 100);                                                // key 5 goes to bucket 5
